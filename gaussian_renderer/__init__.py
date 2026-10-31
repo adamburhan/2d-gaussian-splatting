@@ -152,6 +152,9 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             'rend_normal': render_normal,
             'rend_dist': render_dist,
             'surf_depth': surf_depth,
+            # ADAM CHANGE: the alpha-normalised expected depth sum(w z) / sum(w) regardless of depth_ratio (0 where
+            # nothing is rendered); render.py writes it as the benchmark's depth (docs/contract.md)
+            'expected_depth': render_depth_expected,
             'surf_normal': surf_normal,
     })
 

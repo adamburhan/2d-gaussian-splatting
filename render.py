@@ -16,6 +16,8 @@ from tqdm import tqdm
 from os import makedirs
 from gaussian_renderer import render
 import torchvision
+import numpy as np      # ADAM CHANGE
+from PIL import Image   # ADAM CHANGE
 from utils.general_utils import safe_state
 from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, get_combined_args
@@ -65,9 +67,24 @@ if __name__ == "__main__":
     
     if (not args.skip_test) and (len(scene.getTestCameras()) > 0):
         print("export rendered testing images ...")
-        os.makedirs(test_dir, exist_ok=True)
-        gaussExtractor.reconstruction(scene.getTestCameras())
-        gaussExtractor.export_image(test_dir)
+        # ADAM CHANGE: the benchmark's test renders (docs/contract.md). Files keep the source image names so the
+        # evaluators can pair them with their ground truth; ground truth is not copied. Next to the RGB, the
+        # alpha-normalised expected depth sum(w z) / sum(w) in metres as uint16 mm, 0 where the accumulated opacity
+        # sum(w) is below 0.5, and that opacity as uint8. Tensors, both already computed by render(): "expected_depth"
+        # = allmap[0] / allmap[1], the surfel rasterizer's view-space z of each ray-surfel intersection weighted by
+        # w, then divided by the accumulated opacity, independent of --depth_ratio (not "surf_depth", which blends
+        # in the median depth when depth_ratio > 0); "rend_alpha" = allmap[1], the accumulated opacity.
+        render_path, depth_path, alpha_path = (os.path.join(test_dir, d) for d in ("renders", "depth", "alpha"))
+        for d in (render_path, depth_path, alpha_path):
+            os.makedirs(d, exist_ok=True)
+        with torch.no_grad():
+            for view in tqdm(scene.getTestCameras(), desc="Rendering progress"):
+                render_pkg = render(view, gaussians, pipe, background)
+                alpha, expected_depth = render_pkg["rend_alpha"][0], render_pkg["expected_depth"][0]
+                expected_depth = torch.where(alpha >= 0.5, expected_depth, torch.zeros_like(expected_depth))
+                torchvision.utils.save_image(render_pkg["render"], os.path.join(render_path, view.image_name + ".png"))
+                Image.fromarray((expected_depth * 1000).round().clamp(0, 65535).cpu().numpy().astype(np.uint16)).save(os.path.join(depth_path, view.image_name + ".png"))
+                Image.fromarray((alpha * 255).round().clamp(0, 255).cpu().numpy().astype(np.uint8)).save(os.path.join(alpha_path, view.image_name + ".png"))
     
     
     if args.render_path:

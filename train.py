@@ -69,6 +69,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         render_pkg = render(viewpoint_cam, gaussians, pipe, background)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
         
+        # ADAM CHANGE: ScanNet++ anonymisation masks, as the 3DGS fork applies them: the render is zeroed on
+        # invalid pixels, so the photometric terms there are constant and carry no gradient
+        if viewpoint_cam.gt_alpha_mask is not None:
+            image = image * viewpoint_cam.gt_alpha_mask.cuda()
+
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
@@ -261,6 +266,7 @@ if __name__ == "__main__":
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--seed", type=int, default=0)  # ADAM CHANGE: python / numpy / torch seed (safe_state)
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     args = parser.parse_args(sys.argv[1:])
@@ -269,7 +275,7 @@ if __name__ == "__main__":
     print("Optimizing " + args.model_path)
 
     # Initialize system state (RNG)
-    safe_state(args.quiet)
+    safe_state(args.quiet, args.seed)
 
     # Start GUI server, configure and run training
     network_gui.init(args.ip, args.port)

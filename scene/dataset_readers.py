@@ -29,11 +29,14 @@ class CameraInfo(NamedTuple):
     T: np.array
     FovY: np.array
     FovX: np.array
-    image: np.array
+    image: np.array              # ADAM CHANGE: None = opened by loadCam from image_path (ScanNet++: thousands of frames)
     image_path: str
     image_name: str
     width: int
     height: int
+    is_test: bool = False        # ADAM CHANGE: explicit test split (sparse/0/test.txt or the ScanNet++ DSLR views)
+    mask_path: str = ""          # ADAM CHANGE: ScanNet++ (ported from the 3DGS fork): anonymisation mask, carried as the image's alpha
+    intrinsics: dict = None      # ADAM CHANGE: ScanNet++ (ported from the 3DGS fork): fx, fy, cx, cy, width, height; None = symmetric pinhole
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
@@ -65,7 +68,7 @@ def getNerfppNorm(cam_info):
 
     return {"translate": translate, "radius": radius}
 
-def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
+def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, test_cam_names_list=()):  # ADAM CHANGE: explicit split, as in the 3DGS fork
     cam_infos = []
     for idx, key in enumerate(cam_extrinsics):
         sys.stdout.write('\r')
@@ -99,7 +102,8 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         image = Image.open(image_path)
 
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
-                              image_path=image_path, image_name=image_name, width=width, height=height)
+                              image_path=image_path, image_name=image_name, width=width, height=height,
+                              is_test=extr.name in test_cam_names_list)  # ADAM CHANGE: test.txt entries are file names, extension included
         cam_infos.append(cam_info)
     sys.stdout.write('\n')
     return cam_infos
@@ -141,11 +145,23 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
         cam_extrinsics = read_extrinsics_text(cameras_extrinsic_file)
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
+    # ADAM CHANGE: an explicit sparse/0/test.txt (file names, extension included) takes precedence over the every-Nth LLFF hold-out
+    test_txt = os.path.join(path, "sparse/0", "test.txt")
+    if eval and os.path.exists(test_txt):
+        with open(test_txt, 'r') as file:
+            test_cam_names_list = [line.strip() for line in file]
+    else:
+        test_cam_names_list = []
+
     reading_dir = "images" if images == None else images
-    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
+    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir),
+                                           test_cam_names_list=test_cam_names_list)  # ADAM CHANGE
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
-    if eval:
+    if test_cam_names_list:  # ADAM CHANGE
+        train_cam_infos = [c for c in cam_infos if not c.is_test]
+        test_cam_infos = [c for c in cam_infos if c.is_test]
+    elif eval:
         train_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold != 0]
         test_cam_infos = [c for idx, c in enumerate(cam_infos) if idx % llffhold == 0]
     else:
@@ -254,7 +270,61 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
                            ply_path=ply_path)
     return scene_info
 
+# ADAM CHANGE: ScanNet++ (ported from the 3DGS fork)
+def readScannetppInfo(path, dslr_folder="dslr_undistorted_by_iphone"):
+    """ScanNet++ iPhone NVS benchmark: train on the registered iPhone frames, test on the held-out
+    DSLR views that the official toolbox undistorted with the iPhone intrinsics (dslr_folder: the official
+    16-view folder, or the _ext one tools/split_views.py writes for the extrapolation split). Both COLMAP models
+    are expressed in the scan's world frame, so their poses can be mixed directly.
+    The iPhone camera is treated as the pinhole K, as the toolbox does (released 2DGS has a symmetric frustum,
+    so its principal point is the image centre; the iPhone's is ~1.6 px off). Images are opened by loadCam
+    (image=None): the camera list holds thousands of frames. image_name is the stem, the render file name."""
+    iphone = os.path.join(path, "iphone")
+    camera = list(read_intrinsics_text(os.path.join(iphone, "colmap/cameras.txt")).values())[0]
+    fx, fy, cx, cy = camera.params[:4]
+    intrinsics = dict(fx=fx, fy=fy, cx=cx, cy=cy, width=camera.width, height=camera.height)
+    FovX = focal2fov(fx, camera.width)
+    FovY = focal2fov(fy, camera.height)
+
+    def camera_info(extr, folder, images, masks, is_test):
+        stem = os.path.splitext(extr.name)[0]
+        return CameraInfo(uid=extr.id, R=np.transpose(qvec2rotmat(extr.qvec)), T=np.array(extr.tvec),
+                          FovY=FovY, FovX=FovX, image=None,
+                          image_path=os.path.join(folder, images, extr.name), image_name=stem,
+                          width=camera.width, height=camera.height, is_test=is_test,
+                          mask_path=os.path.join(folder, masks, stem + ".png"), intrinsics=intrinsics)
+
+    train_cam_infos = [camera_info(extr, iphone, "rgb", "rgb_masks", False)
+                       for extr in read_extrinsics_text(os.path.join(iphone, "colmap/images.txt")).values()]
+
+    dslr = os.path.join(path, dslr_folder)
+    with open(os.path.join(dslr, "nerfstudio/transforms.json")) as f:
+        test_names = {frame["file_path"] for frame in json.load(f)["test_frames"]}
+    test_cam_infos = []
+    for extr in read_extrinsics_text(os.path.join(path, "dslr/colmap/images.txt")).values():
+        if extr.name in test_names:
+            test_cam_infos.append(camera_info(extr, dslr, "resized_images", "resized_anon_masks", True))
+    assert len(test_cam_infos) == len(test_names), "DSLR test frames missing from dslr/colmap/images.txt"
+
+    train_cam_infos.sort(key=lambda c: c.image_name)
+    test_cam_infos.sort(key=lambda c: c.image_name)
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+
+    ply_path = os.path.join(iphone, "colmap/points3D.ply")
+    if not os.path.exists(ply_path):
+        xyz, rgb, _ = read_points3D_text(os.path.join(iphone, "colmap/points3D.txt"))
+        storePly(ply_path + f".{os.getpid()}", xyz, rgb)
+        os.replace(ply_path + f".{os.getpid()}", ply_path)  # scenes train in parallel; the swap is atomic
+    pcd = fetchPly(ply_path)
+
+    return SceneInfo(point_cloud=pcd,
+                     train_cameras=train_cam_infos,
+                     test_cameras=test_cam_infos,
+                     nerf_normalization=nerf_normalization,
+                     ply_path=ply_path)
+
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
-    "Blender" : readNerfSyntheticInfo
+    "Blender" : readNerfSyntheticInfo,
+    "Scannetpp": readScannetppInfo  # ADAM CHANGE
 }

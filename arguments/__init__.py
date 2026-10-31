@@ -50,6 +50,8 @@ class ModelParams(ParamGroup):
         self._source_path = ""
         self._model_path = ""
         self._images = "images"
+        # ADAM CHANGE: ScanNet++ folder of the undistorted DSLR test views (tools/split_views.py writes the _ext one)
+        self.dslr_folder = "dslr_undistorted_by_iphone"
         self._resolution = -1
         self._white_background = False
         self.data_device = "cuda"
