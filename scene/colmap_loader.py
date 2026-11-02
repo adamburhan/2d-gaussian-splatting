@@ -170,7 +170,7 @@ def read_intrinsics_text(path):
                 elems = line.split()
                 camera_id = int(elems[0])
                 model = elems[1]
-                assert model in ("PINHOLE", "OPENCV"), "While the loader support other types, the rest of the code assumes PINHOLE (OPENCV is undistorted at load time)"
+                assert model in ("PINHOLE", "OPENCV"), "Only PINHOLE and OPENCV intrinsics are supported; ScanNet++ uses the pinhole K"
                 width = int(elems[2])
                 height = int(elems[3])
                 params = np.array(tuple(map(float, elems[4:])))
