@@ -52,6 +52,9 @@ class ModelParams(ParamGroup):
         self._images = "images"
         # ADAM CHANGE: ScanNet++ folder of the undistorted DSLR test views (tools/split_views.py writes the _ext one)
         self.dslr_folder = "dslr_undistorted_by_iphone"
+        self.train_images = "iphone/rgb"
+        self.train_sparse = "iphone/colmap"
+        self.train_masks = "iphone/rgb_masks"
         self._resolution = -1
         self._white_background = False
         self.data_device = "cuda"

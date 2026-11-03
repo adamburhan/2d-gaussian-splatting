@@ -42,7 +42,9 @@ class Scene:
 
         if os.path.exists(os.path.join(args.source_path, "iphone", "colmap")):  # ADAM CHANGE: ScanNet++ (ported from the 3DGS fork)
             print("Found iphone/colmap, assuming ScanNet++ scene!")
-            scene_info = sceneLoadTypeCallbacks["Scannetpp"](args.source_path, args.dslr_folder)
+            scene_info = sceneLoadTypeCallbacks["Scannetpp"](
+                args.source_path, args.dslr_folder,
+                train_images=args.train_images, train_sparse=args.train_sparse, train_masks=args.train_masks)
         elif os.path.exists(os.path.join(args.source_path, "sparse")):
             scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval)
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
